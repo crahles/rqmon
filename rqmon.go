@@ -132,7 +132,7 @@ func CheckQueueAndAlert(queueName string) {
 		// (TIME_BEFORE_EMAIL_AGAIN is our guard so we don't send on each tick)
 		if time.Since(queue.LastEmpty) > TIME_BEFORE_EMAIL &&
 			time.Since(queue.LastEmail) > TIME_BEFORE_EMAIL_AGAIN {
-			SendAlertEmail(queueName, queue.LastEmpty)
+			SendAlertEmail(queueName, queue.LastEmpty, "No Zero-Count")
 			queue.LastEmail = time.Now()
 		}
 

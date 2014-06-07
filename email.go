@@ -23,7 +23,7 @@ Subject: {{.Subject}}
 {{.Body}}
 `
 
-func SendAlertEmail(queueName string, lastEmpty time.Time) {
+func SendAlertEmail(queueName string, lastEmpty time.Time, msg string) {
 	var err error
 	var doc bytes.Buffer
 
@@ -31,7 +31,7 @@ func SendAlertEmail(queueName string, lastEmpty time.Time) {
 		"from@example.com",
 		"to@example.com",
 		"RQMon Warning for Queue: " + queueName,
-		"Warning: No Zero-Count for " + queueName +
+		"Warning: " + msg + " for " + queueName +
 			" since " + strconv.FormatFloat(
 			time.Since(lastEmpty).Hours(),
 			'f', 0, 64) + " Hours",
@@ -68,5 +68,4 @@ func SendAlertEmail(queueName string, lastEmpty time.Time) {
 		log.Printf("Couldn't send Warning for Queue: %s. Error: %s",
 			queueName, err.Error())
 	}
-
 }
