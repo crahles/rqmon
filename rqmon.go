@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"sync"
@@ -14,12 +15,14 @@ const (
 	TIME_BEFORE_EMAIL       = 24 * time.Hour
 	TIME_BEFORE_EMAIL_AGAIN = 30 * time.Minute
 	TIME_BEFORE_SMS         = 25 * time.Hour
+	FAILURE_THRESHOLD       = 0.15
 
 	// Test Settings
 	// REGULAR_CHECK_TIME      = 1 * time.Second
 	// TIME_BEFORE_EMAIL       = 15 * time.Second
 	// TIME_BEFORE_EMAIL_AGAIN = 30 * time.Second
 	// TIME_BEFORE_SMS         = 1 * time.Minute
+	// FAILURE_THRESHOLD       = 0.15
 )
 
 var (
@@ -30,10 +33,16 @@ var (
 )
 
 type Queue struct {
-	Name      string
-	LastEmpty time.Time
-	LastEmail time.Time
-	SendSMS   bool
+	Name         string
+	FailureCount int64
+	LastEmpty    time.Time
+	LastEmail    time.Time
+	SendSMS      bool
+}
+
+type FailQueue struct {
+	QueueName    string
+	FailureCount int64
 }
 
 type QueueMap struct {
@@ -41,7 +50,13 @@ type QueueMap struct {
 	Map map[string]Queue
 }
 
+type FailureMap struct {
+	sync.RWMutex
+	Map map[string]FailQueue
+}
+
 var queueMap QueueMap
+var failureMap FailureMap
 
 func main() {
 	flag.Parse()
@@ -53,10 +68,12 @@ func main() {
 
 	for {
 		RefreshQueueList()
+		RefreshFailedJobsList()
 
 		queueMap.RLock()
 		for _, queue := range queueMap.Map {
 			go CheckQueueAndAlert(queue.Name)
+			go CheckFailuresAndAlert(queue.Name)
 		}
 		queueMap.RUnlock()
 
@@ -90,10 +107,11 @@ func RefreshQueueList() {
 		_, exists := queueMap.Map[queue]
 		if exists != true {
 			queueMap.Map[queue] = Queue{
-				Name:      queue,
-				LastEmpty: time.Now(),
-				LastEmail: time.Now(),
-				SendSMS:   false,
+				Name:         queue,
+				FailureCount: 0,
+				LastEmpty:    time.Now(),
+				LastEmail:    time.Now(),
+				SendSMS:      false,
 			}
 		}
 	}
@@ -102,6 +120,62 @@ func RefreshQueueList() {
 		if exists != true {
 			delete(queueMap.Map, queue.Name)
 		}
+	}
+}
+
+func RefreshFailedJobsList() {
+	conn := pool.Get()
+	defer conn.Close()
+	failureMap.Lock()
+	queueMap.Lock()
+	defer queueMap.Unlock()
+	defer failureMap.Unlock()
+
+	failureMap.Map = make(map[string]FailQueue)
+
+	lenght, err := redis.Int(conn.Do("LLEN", ns("failed")))
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	// iterate over all failures and count them per queueName
+	for idx := 0; idx < lenght; idx++ {
+		rawJson, err := redis.Bytes(conn.Do("LINDEX", ns("failed"), idx))
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+
+		var failureEntry map[string]interface{}
+		err = json.Unmarshal(rawJson, &failureEntry)
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+
+		queueName := failureEntry["queue"].(string)
+
+		_, exists := failureMap.Map[queueName]
+		if exists != true {
+			failureMap.Map[queueName] = FailQueue{
+				QueueName:    queueName,
+				FailureCount: 1,
+			}
+		} else {
+			failQueue := failureMap.Map[queueName]
+			failQueue.FailureCount++
+			failureMap.Map[queueName] = failQueue
+		}
+	}
+
+	// reset fail count for non-failed queues
+	for _, queue := range queueMap.Map {
+		_, exists := failureMap.Map[queue.Name]
+		if exists != true {
+			queue.FailureCount = 0
+		}
+		queueMap.Map[queue.Name] = queue
 	}
 }
 
@@ -148,6 +222,43 @@ func CheckQueueAndAlert(queueName string) {
 
 	queueMap.Map[queueName] = queue
 	queueMap.Unlock()
+
+}
+
+func CheckFailuresAndAlert(queueName string) {
+	failureMap.RLock()
+	_, exists := failureMap.Map[queueName]
+	if exists == true {
+		failQueue := failureMap.Map[queueName]
+		presentFailCount := failQueue.FailureCount
+
+		queueMap.RLock()
+		pastFailCount := queueMap.Map[failQueue.QueueName].FailureCount
+		queueMap.RUnlock()
+
+		var delta float64
+		// fix division by zero
+		if pastFailCount == 0 {
+			delta = 1
+		} else {
+			delta = float64(presentFailCount-pastFailCount) / float64(pastFailCount)
+		}
+
+		// check if growth is larger than threshold and alert
+		if delta > FAILURE_THRESHOLD {
+			msg := "Failure Count Increase by %.2f%% (%d absolut)"
+			msg = fmt.Sprintf(msg, delta*100, presentFailCount)
+			SendAlertEmail(queueName, time.Now(), msg)
+		}
+
+		// lock queueMap for updating FailCount
+		queueMap.Lock()
+		queue := queueMap.Map[failQueue.QueueName]
+		queue.FailureCount = presentFailCount
+		queueMap.Map[failQueue.QueueName] = queue
+		queueMap.Unlock()
+	}
+	failureMap.RUnlock()
 
 }
 
