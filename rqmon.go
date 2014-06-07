@@ -87,8 +87,8 @@ func RefreshQueueList() {
 
 	// refresh (add new/ delete old) queues in queuesMap
 	for queue, _ := range currentQueues {
-		_, ok := queueMap.Map[queue]
-		if ok != true {
+		_, exists := queueMap.Map[queue]
+		if exists != true {
 			queueMap.Map[queue] = Queue{
 				Name:      queue,
 				LastEmpty: time.Now(),
@@ -98,8 +98,8 @@ func RefreshQueueList() {
 		}
 	}
 	for _, queue := range queueMap.Map {
-		_, ok := currentQueues[queue.Name]
-		if ok != true {
+		_, exists := currentQueues[queue.Name]
+		if exists != true {
 			delete(queueMap.Map, queue.Name)
 		}
 	}
