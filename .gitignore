@@ -6,12 +6,14 @@
 *.a
 *.so
 gin-bin
+rqmon
 
 # Folders
 _obj
 _test
 _bin
 log
+dist
 
 # Architecture specific extensions/prefixes
 *.[568vq]
