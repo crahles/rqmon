@@ -79,9 +79,11 @@ func main() {
 	for {
 		select {
 		case m := <-a:
-			alertHandler <- alert{"A job's failure trend is rising", m}
+			msg := fmt.Sprintf("%s's failure trend is rising", m.O)
+			alertHandler <- alert{msg, m}
 		case m := <-b:
-			alertHandler <- alert{"A queue's length isn't shrinking", m}
+			msg := fmt.Sprintf("%s's queue length isn't shrinking", m.O)
+			alertHandler <- alert{msg, m}
 		}
 	}
 }
@@ -96,12 +98,8 @@ func handleAlerts(c <-chan alert) {
 			alertMap[a.Metric.O] = time.Now()
 			SendAlertByEmail(
 				a.Message,
-				fmt.Sprintf(
-					"%s (Object: %s, Count: %d)\n",
-					a.Message, a.Metric.O, a.Metric.C,
-				),
+				fmt.Sprintf("%s (Count: %d).\n", a.Message, a.Metric.C),
 			)
-
 		}
 	}
 }
