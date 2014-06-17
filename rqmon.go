@@ -334,12 +334,12 @@ func SetupLogger() {
 		file, err := os.OpenFile(
 			*logFile,
 			os.O_APPEND|os.O_WRONLY|os.O_CREATE,
-			0777,
+			0755,
 		)
-		if os.IsExist(err) {
-			log.SetOutput(file)
-		} else {
+		if err != nil {
 			log.Println("Couldn't open log file, falling back to STDOUT!")
+		} else {
+			log.SetOutput(file)
 		}
 	} else {
 		log.SetOutput(ioutil.Discard)
