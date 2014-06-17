@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"syscall"
@@ -26,7 +27,10 @@ const (
 )
 
 var (
-	pool          *redis.Pool
+	pool *redis.Pool
+
+	logFile = flag.String("logFile", "logpath/file.log", "")
+
 	redisServer   = flag.String("redisServer", ":6379", "")
 	redisPassword = flag.String("redisPassword", "", "")
 
@@ -264,4 +268,19 @@ func SetupLogger() {
 	hostname, _ := os.Hostname()
 	prefix := "[" + hostname + "] "
 	log.SetPrefix(fmt.Sprintf("%spid:%d ", prefix, syscall.Getpid()))
+
+	if *logFile != "" {
+		file, err := os.OpenFile(
+			*logFile,
+			os.O_APPEND|os.O_WRONLY|os.O_CREATE,
+			0777,
+		)
+		if os.IsExist(err) {
+			log.SetOutput(file)
+		} else {
+			log.Println("Couldn't open log file, falling back to STDOUT!")
+		}
+	} else {
+		log.SetOutput(ioutil.Discard)
+	}
 }
