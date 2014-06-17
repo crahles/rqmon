@@ -132,6 +132,9 @@ func pollLengths(c chan<- metric) {
 			}
 		}
 
+		// special cleanup message
+		c <- metric{"cleanup", -1}
+
 		<-ticker.C
 	}
 }
@@ -147,6 +150,11 @@ func alertNotEmpty() chan metric {
 
 		for {
 			l := <-lens
+			if l.O == "cleanup" && l.C == -1 {
+				removeOrphanQueues(&queues)
+				continue
+			}
+
 			_, exists := queues[l.O]
 			if !exists || l.C == 0 {
 				queues[l.O] = time.Now()
@@ -188,6 +196,9 @@ func pollFailed(c chan<- metric) {
 			c <- metric{job, count}
 		}
 
+		// special cleanup message
+		c <- metric{"cleanup", -1}
+
 		<-ticker.C
 	}
 }
@@ -203,6 +214,11 @@ func alertFailureTrend() chan metric {
 		lastCounts := make(map[string]int64)
 		for {
 			f := <-fails
+			if f.O == "cleanup" && f.C == -1 {
+				removeOrphanJobs(&lastCounts)
+				continue
+			}
+
 			if _, exists := lastCounts[f.O]; !exists {
 				lastCounts[f.O] = f.C
 				continue
@@ -216,6 +232,48 @@ func alertFailureTrend() chan metric {
 	}()
 
 	return c
+}
+
+func removeOrphanQueues(queues *map[string]time.Time) {
+	conn := pool.Get()
+	defer conn.Close()
+
+	slice, err := redis.Strings(conn.Do("SMEMBERS", ns("queues")))
+	if !ok(err) {
+		return
+	}
+
+	list := make(map[string]struct{})
+	for _, v := range slice {
+		list[v] = struct{}{}
+	}
+
+	for key, _ := range *queues {
+		if _, exists := list[key]; !exists {
+			delete(*queues, key)
+		}
+	}
+}
+
+func removeOrphanJobs(lastCounts *map[string]int64) {
+	conn := pool.Get()
+	defer conn.Close()
+
+	list := make(map[string]struct{})
+	objs, err := redis.Strings(conn.Do("LRANGE", ns("failed"), "0", "-1"))
+	if !ok(err) {
+		return
+	}
+
+	for _, o := range objs {
+		list[jobName(o)] = struct{}{}
+	}
+
+	for key, _ := range *lastCounts {
+		if _, exists := list[key]; !exists {
+			delete(*lastCounts, key)
+		}
+	}
 }
 
 func jobName(object string) string {
