@@ -127,8 +127,10 @@ func queueName(object string) string {
 	if !ok(err) {
 		return ""
 	}
-
-	return failureEntry["queue"].(string)
+	if q, ok := failureEntry["queue"].(string); ok {
+		return q
+	}
+	return ""
 }
 
 func ok(err error) bool {
