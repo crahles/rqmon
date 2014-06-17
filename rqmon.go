@@ -35,6 +35,7 @@ var (
 	redisPassword = flag.String("redisPassword", "", "")
 
 	resqueNamespace = flag.String("resqueNamespace", "resque:", "")
+	resqueWebUrl    = flag.String("resqueWebUrl", "http://resque.example.com", "")
 
 	smtpServer   = flag.String("smtpServer", "smtp.gmail.com", "")
 	smtpPort     = flag.String("smtpPort", "587", "")
@@ -65,6 +66,7 @@ type failedJobPayload struct {
 
 type alert struct {
 	Message string
+	WebLink string
 	Metric  metric
 }
 
@@ -84,10 +86,12 @@ func main() {
 		select {
 		case m := <-a:
 			msg := fmt.Sprintf("%s's failure trend is rising", m.O)
-			alertHandler <- alert{msg, m}
+			link := fmt.Sprintf("%s/cleaner_list?c=%s", *resqueWebUrl, m.O)
+			alertHandler <- alert{msg, link, m}
 		case m := <-b:
 			msg := fmt.Sprintf("%s's queue length isn't shrinking", m.O)
-			alertHandler <- alert{msg, m}
+			link := fmt.Sprintf("%s/overview", *resqueWebUrl)
+			alertHandler <- alert{msg, link, m}
 		}
 	}
 }
@@ -102,7 +106,8 @@ func handleAlerts(c <-chan alert) {
 			alertMap[a.Metric.O] = time.Now()
 			SendAlertByEmail(
 				a.Message,
-				fmt.Sprintf("%s (Count: %d).\n", a.Message, a.Metric.C),
+				fmt.Sprintf("%s (Count: %d).", a.Message, a.Metric.C),
+				a.WebLink,
 			)
 		}
 	}

@@ -3,33 +3,43 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net/smtp"
 	"text/template"
 )
 
 type SmtpTemplateData struct {
-	From    string
-	To      string
-	Subject string
-	Body    string
+	From           string
+	To             string
+	Subject        string
+	FailureMessage string
+	ResqueLink     string
 }
 
 const emailTemplate = `From: {{.From}}
 To: {{.To}}
-Subject: {{.Subject}}
+Subject: [RQMon] {{.Subject}}
 
-{{.Body}}
+RQMon noticed the following alert has passed our alerting threshold:
+
+Issue: {{.FailureMessage}}
+
+View Details: {{.ResqueLink}}
+
+Thanks,
+Resque Queue Monitoring Daemon
 `
 
-func SendAlertByEmail(subject string, body string) {
+func SendAlertByEmail(subject string, failure string, weblink string) {
 	var err error
 	var doc bytes.Buffer
 
 	context := &SmtpTemplateData{
 		*alertFrom,
 		*alertRecipient,
-		"[RQMon] " + subject,
-		body,
+		subject,
+		failure,
+		weblink,
 	}
 
 	t := template.New("emailTemplate")
