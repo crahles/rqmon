@@ -63,4 +63,5 @@ func SendAlertByEmail(subject string, failure string, weblink string) {
 	)
 
 	ok(err)
+	log.Printf("send email alert: %s\n", failure)
 }
