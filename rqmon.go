@@ -13,23 +13,32 @@ import (
 )
 
 const (
-	// REGULAR_CHECK_TIME      = 30 * time.Second
-	// TIME_BEFORE_EMAIL       = 24 * time.Hour
-	// TIME_BEFORE_EMAIL_AGAIN = 30 * time.Minute
-	// FAILURE_THRESHOLD       = 0.15
+	REGULAR_CHECK_TIME      = 30 * time.Second
+	TIME_BEFORE_ALERT       = 24 * time.Hour
+	TIME_BEFORE_ALERT_AGAIN = 30 * time.Minute
+	FAILURE_THRESHOLD       = 0.15
 
 	// Test Settings
-	REGULAR_CHECK_TIME      = 2 * time.Second
-	TIME_BEFORE_ALERT       = 10 * time.Second
-	TIME_BEFORE_ALERT_AGAIN = 20 * time.Second
-	FAILURE_THRESHOLD       = 0.15
+	// REGULAR_CHECK_TIME      = 2 * time.Second
+	// TIME_BEFORE_ALERT       = 10 * time.Second
+	// TIME_BEFORE_ALERT_AGAIN = 20 * time.Second
+	// FAILURE_THRESHOLD       = 0.15
 )
 
 var (
-	pool            *redis.Pool
-	redisServer     = flag.String("redisServer", ":6379", "")
-	redisPassword   = flag.String("redisPassword", "", "")
+	pool          *redis.Pool
+	redisServer   = flag.String("redisServer", ":6379", "")
+	redisPassword = flag.String("redisPassword", "", "")
+
 	resqueNamespace = flag.String("resqueNamespace", "resque:", "")
+
+	smtpServer   = flag.String("smtpServer", "smtp.gmail.com", "")
+	smtpPort     = flag.String("smtpPort", "587", "")
+	smtpUsername = flag.String("smtpUsername", "me@example.com", "")
+	smtpPassword = flag.String("smtpPassword", "Passw0rd", "")
+
+	alertFrom      = flag.String("alertFrom", "me@example.com", "")
+	alertRecipient = flag.String("alertRecipient", "me@example.com", "")
 )
 
 type metric struct {
@@ -70,7 +79,7 @@ func main() {
 	for {
 		select {
 		case m := <-a:
-			alertHandler <- alert{"A queue's failure trend is rising", m}
+			alertHandler <- alert{"A job's failure trend is rising", m}
 		case m := <-b:
 			alertHandler <- alert{"A queue's length isn't shrinking", m}
 		}
@@ -83,13 +92,16 @@ func handleAlerts(c <-chan alert) {
 	for {
 		a := <-c
 		_, exists := alertMap[a.Metric.O]
-		if !exists {
+		if !exists || time.Since(alertMap[a.Metric.O]) > TIME_BEFORE_ALERT_AGAIN {
 			alertMap[a.Metric.O] = time.Now()
-			log.Printf("%s (Object: %s, Count: %d)\n", a.Message, a.Metric.O, a.Metric.C)
-		}
-		if time.Since(alertMap[a.Metric.O]) > TIME_BEFORE_ALERT_AGAIN {
-			alertMap[a.Metric.O] = time.Now()
-			log.Printf("%s (Object: %s, Count: %d)\n", a.Message, a.Metric.O, a.Metric.C)
+			SendAlertByEmail(
+				a.Message,
+				fmt.Sprintf(
+					"%s (Object: %s, Count: %d)\n",
+					a.Message, a.Metric.O, a.Metric.C,
+				),
+			)
+
 		}
 	}
 }
