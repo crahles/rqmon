@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	REGULAR_CHECK_TIME      = 30 * time.Second
-	TIME_BEFORE_ALERT       = 24 * time.Hour
+	REGULAR_CHECK_TIME      = 15 * time.Second
+	TIME_BEFORE_ALERT       = 6 * time.Hour
 	TIME_BEFORE_ALERT_AGAIN = 30 * time.Minute
-	FAILURE_THRESHOLD       = 0.15
+	FAILURE_THRESHOLD       = 0.10
 
 	// Test Settings
 	// REGULAR_CHECK_TIME      = 2 * time.Second
