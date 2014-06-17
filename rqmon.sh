@@ -13,9 +13,9 @@
 
 BASE=$(basename $0)
 
-BIN=/usr/bin/$BASE
-PIDFILE=/var/run/$BASE.pid
-OPTS=""
+RQMON_BIN=/usr/bin/$BASE
+RQMON_PIDFILE=/var/run/$BASE.pid
+RQMON_OPTS='-logFile=/var/log/rqmon.log'
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
@@ -34,7 +34,7 @@ fi
 
 # Check rqmon is present
 if [ ! -x $BIN ]; then
-    log_failure_msg "$BIN not present or not executable"
+    log_failure_msg "$RQMON_BIN not present or not executable"
     exit 1
 fi
 
@@ -42,24 +42,23 @@ case "$1" in
     start)
         log_begin_msg "Starting RQMon: $BASE"
         start-stop-daemon --start --background \
-            --exec "$BIN" \
-            --pidfile "$PIDFILE" \
-            -- -d -p "$PIDFILE" \
-            $OPTS
+            --exec "$RQMON_BIN" \
+            -m -p $RQMON_PIDFILE \
+            -- $RQMON_OPTS
         log_end_msg $?
         ;;
 
     stop)
         log_begin_msg "Stopping RQMon: $BASE"
         start-stop-daemon --stop \
-            --pidfile "$PIDFILE"
+            --pidfile $RQMON_PIDFILE
         log_end_msg $?
         ;;
 
     restart)
-        pid=`cat "$PIDFILE" 2>/dev/null`
-        [ -n "$pid" ] \
-            && ps -p $pid > /dev/null 2>&1 \
+        rqpid=`cat "$RQMON_PIDFILE" 2>/dev/null`
+        [ -n "$rqpid" ] \
+            && ps -p $rqpid > /dev/null 2>&1 \
             && $0 stop
         $0 start
         ;;
@@ -69,7 +68,7 @@ case "$1" in
         ;;
 
     status)
-        status_of_proc -p "$PIDFILE" "$BIN" rqmon
+        status_of_proc -p $RQMON_PIDFILE $RQMON_BIN rqmon
         ;;
 
     *)
