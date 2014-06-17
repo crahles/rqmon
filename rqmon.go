@@ -4,25 +4,25 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"sync"
+	"log"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/garyburd/redigo/redis"
 )
 
 const (
-	REGULAR_CHECK_TIME      = 30 * time.Second
-	TIME_BEFORE_EMAIL       = 24 * time.Hour
-	TIME_BEFORE_EMAIL_AGAIN = 30 * time.Minute
-	TIME_BEFORE_SMS         = 25 * time.Hour
-	FAILURE_THRESHOLD       = 0.15
+	// REGULAR_CHECK_TIME      = 30 * time.Second
+	// TIME_BEFORE_EMAIL       = 24 * time.Hour
+	// TIME_BEFORE_EMAIL_AGAIN = 30 * time.Minute
+	// FAILURE_THRESHOLD       = 0.15
 
 	// Test Settings
-	// REGULAR_CHECK_TIME      = 1 * time.Second
-	// TIME_BEFORE_EMAIL       = 15 * time.Second
-	// TIME_BEFORE_EMAIL_AGAIN = 30 * time.Second
-	// TIME_BEFORE_SMS         = 1 * time.Minute
-	// FAILURE_THRESHOLD       = 0.15
+	REGULAR_CHECK_TIME      = 2 * time.Second
+	TIME_BEFORE_ALERT       = 10 * time.Second
+	TIME_BEFORE_ALERT_AGAIN = 20 * time.Second
+	FAILURE_THRESHOLD       = 0.15
 )
 
 var (
@@ -32,234 +32,197 @@ var (
 	resqueNamespace = flag.String("resqueNamespace", "resque:", "")
 )
 
-type Queue struct {
-	Name         string
-	FailureCount int64
-	LastEmpty    time.Time
-	LastEmail    time.Time
-	SendSMS      bool
+type metric struct {
+	O string
+	C int64
 }
 
-type FailQueue struct {
-	QueueName    string
-	FailureCount int64
+type failedJob struct {
+	FailedAt  string `json:"failed_at"`
+	Payload   failedJobPayload
+	Exception string
+	Queue     string
+	Worker    string
 }
 
-type QueueMap struct {
-	sync.RWMutex
-	Map map[string]Queue
+type failedJobPayload struct {
+	Class string
+	Args  string
 }
 
-type FailureMap struct {
-	sync.RWMutex
-	Map map[string]FailQueue
+type alert struct {
+	Message string
+	Metric  metric
 }
-
-var queueMap QueueMap
-var failureMap FailureMap
 
 func main() {
 	flag.Parse()
+	SetupLogger()
 	pool = newPool(*redisServer, *redisPassword)
 
-	queueMap = QueueMap{
-		Map: make(map[string]Queue),
+	log.Println("RQMon started...")
+
+	alertHandler := make(chan alert)
+	go handleAlerts(alertHandler)
+
+	a := alertFailureTrend()
+	b := alertNotEmpty()
+	for {
+		select {
+		case m := <-a:
+			alertHandler <- alert{"A queue's failure trend is rising", m}
+		case m := <-b:
+			alertHandler <- alert{"A queue's length isn't shrinking", m}
+		}
 	}
+}
+
+func handleAlerts(c <-chan alert) {
+	alertMap := make(map[string]time.Time)
 
 	for {
-		RefreshQueueList()
-		RefreshFailedJobsList()
-
-		queueMap.RLock()
-		for _, queue := range queueMap.Map {
-			go CheckQueueAndAlert(queue.Name)
-			go CheckFailuresAndAlert(queue.Name)
+		a := <-c
+		_, exists := alertMap[a.Metric.O]
+		if !exists {
+			alertMap[a.Metric.O] = time.Now()
+			log.Printf("%s (Object: %s, Count: %d)\n", a.Message, a.Metric.O, a.Metric.C)
 		}
-		queueMap.RUnlock()
-
-		time.Sleep(REGULAR_CHECK_TIME)
+		if time.Since(alertMap[a.Metric.O]) > TIME_BEFORE_ALERT_AGAIN {
+			alertMap[a.Metric.O] = time.Now()
+			log.Printf("%s (Object: %s, Count: %d)\n", a.Message, a.Metric.O, a.Metric.C)
+		}
 	}
-
 }
 
-func RefreshQueueList() {
+func pollLengths(c chan<- metric) {
+	ticker := time.NewTicker(REGULAR_CHECK_TIME)
 	conn := pool.Get()
 	defer conn.Close()
-	queueMap.Lock()
-	defer queueMap.Unlock()
 
-	currentQueues := make(map[string]bool)
+	for {
+		queues, err := redis.Strings(conn.Do("SMEMBERS", ns("queues")))
+		if !ok(err) {
+			<-ticker.C
+			continue
+		}
 
-	// query current queues list
-	queues, err := redis.Strings(conn.Do("SMEMBERS", ns("queues")))
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
-
-	// convert result slice to map for lookups
-	for _, queue := range queues {
-		currentQueues[queue] = true
-	}
-
-	// refresh (add new/ delete old) queues in queuesMap
-	for queue, _ := range currentQueues {
-		_, exists := queueMap.Map[queue]
-		if exists != true {
-			queueMap.Map[queue] = Queue{
-				Name:         queue,
-				FailureCount: 0,
-				LastEmpty:    time.Now(),
-				LastEmail:    time.Now(),
-				SendSMS:      false,
+		for _, q := range queues {
+			n, err := redis.Int64(conn.Do("LLEN", ns("queue:"+q)))
+			if ok(err) {
+				c <- metric{q, n}
 			}
 		}
-	}
-	for _, queue := range queueMap.Map {
-		_, exists := currentQueues[queue.Name]
-		if exists != true {
-			delete(queueMap.Map, queue.Name)
-		}
+
+		<-ticker.C
 	}
 }
 
-func RefreshFailedJobsList() {
-	conn := pool.Get()
-	defer conn.Close()
-	failureMap.Lock()
-	queueMap.Lock()
-	defer queueMap.Unlock()
-	defer failureMap.Unlock()
+func alertNotEmpty() chan metric {
+	lens := make(chan metric)
+	go pollLengths(lens)
 
-	failureMap.Map = make(map[string]FailQueue)
+	c := make(chan metric)
 
-	lenght, err := redis.Int(conn.Do("LLEN", ns("failed")))
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
+	go func() {
+		queues := make(map[string]time.Time)
 
-	// iterate over all failures and count them per queueName
-	for idx := 0; idx < lenght; idx++ {
-		rawJson, err := redis.Bytes(conn.Do("LINDEX", ns("failed"), idx))
-		if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-
-		var failureEntry map[string]interface{}
-		err = json.Unmarshal(rawJson, &failureEntry)
-		if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-
-		queueName := failureEntry["queue"].(string)
-
-		_, exists := failureMap.Map[queueName]
-		if exists != true {
-			failureMap.Map[queueName] = FailQueue{
-				QueueName:    queueName,
-				FailureCount: 1,
+		for {
+			l := <-lens
+			_, exists := queues[l.O]
+			if !exists || l.C == 0 {
+				queues[l.O] = time.Now()
+				continue
 			}
-		} else {
-			failQueue := failureMap.Map[queueName]
-			failQueue.FailureCount++
-			failureMap.Map[queueName] = failQueue
+			if time.Since(queues[l.O]) > TIME_BEFORE_ALERT {
+				c <- l
+			}
 		}
-	}
 
-	// reset fail count for non-failed queues
-	for _, queue := range queueMap.Map {
-		_, exists := failureMap.Map[queue.Name]
-		if exists != true {
-			queue.FailureCount = 0
-		}
-		queueMap.Map[queue.Name] = queue
-	}
+	}()
+
+	return c
 }
 
-func CheckQueueAndAlert(queueName string) {
+func pollFailed(c chan<- metric) {
+	ticker := time.NewTicker(REGULAR_CHECK_TIME)
 	conn := pool.Get()
 	defer conn.Close()
 
-	lenght, err := redis.Int64(conn.Do("LLEN", ns("queue:"+queueName)))
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
+	for {
+		counts := make(map[string]int64)
 
-	queueMap.Lock()
-	queue, _ := queueMap.Map[queueName]
-
-	// If queue lenght is zero everything is fine for us, just reset counters
-	if lenght == 0 {
-		queue.LastEmpty = time.Now()
-		queue.SendSMS = false
-
-	} else
-	// queue lenght is not zero so go and check if we should alert someone
-	{
-
-		// if time since the queue was last on zero is greater than
-		// TIME_BEFORE_EMAIL we send an alert via email
-		// (TIME_BEFORE_EMAIL_AGAIN is our guard so we don't send on each tick)
-		if time.Since(queue.LastEmpty) > TIME_BEFORE_EMAIL &&
-			time.Since(queue.LastEmail) > TIME_BEFORE_EMAIL_AGAIN {
-			SendAlertEmail(queueName, queue.LastEmpty, "No Zero-Count")
-			queue.LastEmail = time.Now()
+		objs, err := redis.Strings(conn.Do("LRANGE", ns("failed"), "0", "-1"))
+		if !ok(err) {
+			<-ticker.C
+			continue
 		}
 
-		// check if should send an one-time sms alert
-		if time.Since(queue.LastEmpty) > TIME_BEFORE_EMAIL &&
-			time.Since(queue.LastEmpty) > TIME_BEFORE_SMS &&
-			queue.SendSMS == false {
-			SendAlertSMS(queueName, queue.LastEmpty)
-			queue.SendSMS = true
-
+		for _, o := range objs {
+			if _, exists := counts[jobName(o)]; !exists {
+				counts[jobName(o)] = 1
+				continue
+			}
+			counts[jobName(o)] += 1
 		}
+
+		for job, count := range counts {
+			c <- metric{job, count}
+		}
+
+		<-ticker.C
 	}
-
-	queueMap.Map[queueName] = queue
-	queueMap.Unlock()
-
 }
 
-func CheckFailuresAndAlert(queueName string) {
-	failureMap.RLock()
-	_, exists := failureMap.Map[queueName]
-	if exists == true {
-		failQueue := failureMap.Map[queueName]
-		presentFailCount := failQueue.FailureCount
+func alertFailureTrend() chan metric {
 
-		queueMap.RLock()
-		pastFailCount := queueMap.Map[failQueue.QueueName].FailureCount
-		queueMap.RUnlock()
+	fails := make(chan metric)
+	go pollFailed(fails)
 
-		var delta float64
-		// fix division by zero
-		if pastFailCount == 0 {
-			delta = 1
-		} else {
-			delta = float64(presentFailCount-pastFailCount) / float64(pastFailCount)
+	c := make(chan metric)
+
+	go func() {
+		lastCounts := make(map[string]int64)
+		log.Printf("lastCounts: %#v\n", lastCounts)
+		for {
+			f := <-fails
+			if _, exists := lastCounts[f.O]; !exists {
+				lastCounts[f.O] = f.C
+				log.Printf("lastCounts: %#v\n", lastCounts)
+				continue
+			}
+
+			if deltaGtFailureThreshold(f.C, lastCounts[f.O]) {
+				c <- f
+			}
+			lastCounts[f.O] = f.C
 		}
+	}()
 
-		// check if growth is larger than threshold and alert
-		if delta > FAILURE_THRESHOLD {
-			msg := "Failure Count Increase by %.2f%% (%d absolut)"
-			msg = fmt.Sprintf(msg, delta*100, presentFailCount)
-			SendAlertEmail(queueName, time.Now(), msg)
-		}
+	return c
+}
 
-		// lock queueMap for updating FailCount
-		queueMap.Lock()
-		queue := queueMap.Map[failQueue.QueueName]
-		queue.FailureCount = presentFailCount
-		queueMap.Map[failQueue.QueueName] = queue
-		queueMap.Unlock()
+func jobName(object string) string {
+	var failedJob failedJob
+	err := json.Unmarshal([]byte(object), &failedJob)
+	if !ok(err) {
+		return "unknown"
 	}
-	failureMap.RUnlock()
+	if failedJob.Payload.Class != "" {
+		return failedJob.Payload.Class
+	}
+	return "unknown"
+}
 
+func ok(err error) bool {
+	if err != nil {
+		log.Print(err)
+		return false
+	}
+	return true
+}
+
+func deltaGtFailureThreshold(a, b int64) bool {
+	return float64(a) > float64(b)*(1+FAILURE_THRESHOLD)
 }
 
 func ns(key string) string {
@@ -286,4 +249,11 @@ func newPool(server, password string) *redis.Pool {
 			return err
 		},
 	}
+}
+
+func SetupLogger() {
+	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+	hostname, _ := os.Hostname()
+	prefix := "[" + hostname + "] "
+	log.SetPrefix(fmt.Sprintf("%spid:%d ", prefix, syscall.Getpid()))
 }
