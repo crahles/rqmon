@@ -52,16 +52,14 @@ type metric struct {
 }
 
 type failedJob struct {
-	FailedAt  string `json:"failed_at"`
-	Payload   failedJobPayload
-	Exception string
-	Queue     string
-	Worker    string
+	FailedAt string `json:"failed_at"`
+	Payload  failedJobPayload
+	Queue    string
+	Worker   string
 }
 
 type failedJobPayload struct {
 	Class string
-	Args  string
 }
 
 type alert struct {
@@ -75,7 +73,7 @@ func main() {
 	SetupLogger()
 	pool = newPool(*redisServer, *redisPassword)
 
-	log.Println("RQMon started...")
+	log.Printf("\nRQMon starting...\n\n")
 
 	alertHandler := make(chan alert)
 	go handleAlerts(alertHandler)
