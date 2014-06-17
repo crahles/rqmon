@@ -194,12 +194,10 @@ func alertFailureTrend() chan metric {
 
 	go func() {
 		lastCounts := make(map[string]int64)
-		log.Printf("lastCounts: %#v\n", lastCounts)
 		for {
 			f := <-fails
 			if _, exists := lastCounts[f.O]; !exists {
 				lastCounts[f.O] = f.C
-				log.Printf("lastCounts: %#v\n", lastCounts)
 				continue
 			}
 
