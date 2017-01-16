@@ -44,6 +44,10 @@ var (
 
 	alertFrom      = flag.String("alertFrom", "me@example.com", "")
 	alertRecipient = flag.String("alertRecipient", "me@example.com", "")
+
+	showVersion = flag.Bool("version", false, "Show version and exit")
+	Commit      = "dirty"
+	Version     = "DEV"
 )
 
 type metric struct {
@@ -68,8 +72,18 @@ type alert struct {
 	Metric  metric
 }
 
+func versionAndExit() {
+	fmt.Printf("v%s-%s\n", Version, Commit)
+	os.Exit(0)
+}
+
 func main() {
 	flag.Parse()
+
+	if *showVersion {
+		versionAndExit()
+	}
+
 	SetupLogger()
 	pool = newPool(*redisServer, *redisPassword)
 
