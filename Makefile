@@ -2,8 +2,8 @@ COMMIT     := $(shell git rev-parse --short HEAD)
 VERSION    := 1.0
 
 LDFLAGS    := -ldflags \
-              "-X main.Commit $(COMMIT)\
-               -X main.Version $(VERSION)"
+              "-X main.Commit=$(COMMIT)\
+               -X main.Version=$(VERSION)"
 
 GOOS       := $(shell go env GOOS)
 GOARCH     := $(shell go env GOARCH)
