@@ -116,6 +116,7 @@ func handleAlerts(c <-chan alert) {
 		_, exists := alertMap[a.Metric.O]
 		if !exists || time.Since(alertMap[a.Metric.O]) > TIME_BEFORE_ALERT_AGAIN {
 			alertMap[a.Metric.O] = time.Now()
+			log.Printf("\nAlerting via Mail: %s (Count: %d).\n\n", a.Message, a.Metric.C)
 			SendAlertByEmail(
 				a.Message,
 				fmt.Sprintf("%s (Count: %d).", a.Message, a.Metric.C),
