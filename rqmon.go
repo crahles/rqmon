@@ -339,7 +339,7 @@ func newPool(server, password string) *redis.Pool {
 }
 
 func SetupLogger() {
-	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	hostname, _ := os.Hostname()
 	prefix := "[" + hostname + "] "
 	log.SetPrefix(fmt.Sprintf("%spid:%d ", prefix, syscall.Getpid()))
