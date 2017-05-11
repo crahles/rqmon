@@ -94,7 +94,7 @@ func main() {
 
 	pool = newPool(*redisServer, *redisPassword)
 
-	log.Printf("\nRQMon starting...\n\n")
+	log.Printf("RQMon starting...\n\n")
 
 	alertHandler := make(chan alert)
 	go handleAlerts(alertHandler)
