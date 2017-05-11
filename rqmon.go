@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"syscall"
 	"time"
 
@@ -86,7 +87,11 @@ func main() {
 	}
 
 	writePid()
+	defer removePid()
+
 	SetupLogger()
+	setupInterruptHandler()
+
 	pool = newPool(*redisServer, *redisPassword)
 
 	log.Printf("\nRQMon starting...\n\n")
@@ -348,6 +353,9 @@ func writePid() {
 		panic(err)
 	}
 }
+func removePid() {
+	os.Remove(*pidFile)
+}
 
 func SetupLogger() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
@@ -369,4 +377,15 @@ func SetupLogger() {
 	} else {
 		log.SetOutput(ioutil.Discard)
 	}
+}
+
+func setupInterruptHandler() {
+	signalChannel := make(chan os.Signal, 2)
+	signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-signalChannel
+		log.Printf("Received SIGTERM. Bye!\n")
+		removePid()
+		os.Exit(0)
+	}()
 }
