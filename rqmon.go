@@ -30,6 +30,7 @@ var (
 	pool *redis.Pool
 
 	logFile = flag.String("logFile", "logpath/file.log", "")
+	pidFile = flag.String("pidFile", "rqmon.pid", "")
 
 	redisServer   = flag.String("redisServer", ":6379", "")
 	redisPassword = flag.String("redisPassword", "", "")
@@ -84,6 +85,7 @@ func main() {
 		versionAndExit()
 	}
 
+	writePid()
 	SetupLogger()
 	pool = newPool(*redisServer, *redisPassword)
 
@@ -336,6 +338,14 @@ func newPool(server, password string) *redis.Pool {
 			_, err := c.Do("PING")
 			return err
 		},
+	}
+}
+
+func writePid() {
+	pid := []byte(fmt.Sprintf("%d\n", syscall.Getpid()))
+	err := ioutil.WriteFile(*pidFile, pid, 0644)
+	if err != nil {
+		panic(err)
 	}
 }
 
