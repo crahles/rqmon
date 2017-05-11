@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"syscall"
 	"time"
 
@@ -30,6 +31,7 @@ var (
 	pool *redis.Pool
 
 	logFile = flag.String("logFile", "logpath/file.log", "")
+	pidFile = flag.String("pidFile", "rqmon.pid", "")
 
 	redisServer   = flag.String("redisServer", ":6379", "")
 	redisPassword = flag.String("redisPassword", "", "")
@@ -44,6 +46,10 @@ var (
 
 	alertFrom      = flag.String("alertFrom", "me@example.com", "")
 	alertRecipient = flag.String("alertRecipient", "me@example.com", "")
+
+	showVersion = flag.Bool("version", false, "Show version and exit")
+	Commit      = "dirty"
+	Version     = "DEV"
 )
 
 type metric struct {
@@ -68,12 +74,27 @@ type alert struct {
 	Metric  metric
 }
 
+func versionAndExit() {
+	fmt.Printf("v%s-%s\n", Version, Commit)
+	os.Exit(0)
+}
+
 func main() {
 	flag.Parse()
+
+	if *showVersion {
+		versionAndExit()
+	}
+
+	writePid()
+	defer removePid()
+
 	SetupLogger()
+	setupInterruptHandler()
+
 	pool = newPool(*redisServer, *redisPassword)
 
-	log.Printf("\nRQMon starting...\n\n")
+	log.Printf("RQMon starting...\n\n")
 
 	alertHandler := make(chan alert)
 	go handleAlerts(alertHandler)
@@ -102,6 +123,7 @@ func handleAlerts(c <-chan alert) {
 		_, exists := alertMap[a.Metric.O]
 		if !exists || time.Since(alertMap[a.Metric.O]) > TIME_BEFORE_ALERT_AGAIN {
 			alertMap[a.Metric.O] = time.Now()
+			log.Printf("\nAlerting via Mail: %s (Count: %d).\n\n", a.Message, a.Metric.C)
 			SendAlertByEmail(
 				a.Message,
 				fmt.Sprintf("%s (Count: %d).", a.Message, a.Metric.C),
@@ -324,8 +346,19 @@ func newPool(server, password string) *redis.Pool {
 	}
 }
 
+func writePid() {
+	pid := []byte(fmt.Sprintf("%d\n", syscall.Getpid()))
+	err := ioutil.WriteFile(*pidFile, pid, 0644)
+	if err != nil {
+		panic(err)
+	}
+}
+func removePid() {
+	os.Remove(*pidFile)
+}
+
 func SetupLogger() {
-	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	hostname, _ := os.Hostname()
 	prefix := "[" + hostname + "] "
 	log.SetPrefix(fmt.Sprintf("%spid:%d ", prefix, syscall.Getpid()))
@@ -344,4 +377,15 @@ func SetupLogger() {
 	} else {
 		log.SetOutput(ioutil.Discard)
 	}
+}
+
+func setupInterruptHandler() {
+	signalChannel := make(chan os.Signal, 2)
+	signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-signalChannel
+		log.Printf("Received SIGTERM. Bye!\n")
+		removePid()
+		os.Exit(0)
+	}()
 }
